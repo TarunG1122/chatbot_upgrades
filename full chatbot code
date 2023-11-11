@@ -1,0 +1,759 @@
+from flask import Flask, render_template, request, redirect, jsonify, session
+from functools import wraps
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import random
+import os
+from datetime import datetime
+import webbrowser
+import difflib
+import calendar
+
+
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'
+
+# Create a directory for logs_details if it doesn't exist
+logs_directory = 'logs_details'
+if not os.path.exists(logs_directory):
+    os.makedirs(logs_directory)
+
+# Load login passwords from Excel file
+login_check = pd.read_excel(r'C:\inetpub\wwwroot\chatbot_RIDB_contents\logincheck.xlsx')
+
+def authenticated_route(route_func):
+    @wraps(route_func)
+    def decorated_route(*args, **kwargs):
+        # Check if the email address is in the session
+        if 'email' in session:
+            return route_func(*args, **kwargs)
+        else:
+            # Redirect to the login page if not authenticated
+            return redirect('/')
+
+    return decorated_route
+
+@app.route('/', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email_address = request.form['email_address']
+
+        # Check if the email address is in the DataFrame
+        if email_address in login_check['email_address'].tolist():
+            # Store the email address in the session
+            session['email'] = email_address
+            return redirect('/chatbot')
+
+        return render_template('login5.html', error=True)
+
+    return render_template('login5.html', error=False)
+
+
+@app.route('/chatbot', methods=['GET'])
+@authenticated_route
+def chatbot():
+    return render_template('chathtml6-ed1.html', response='')
+
+
+@app.route('/chatbot', methods=['POST'])
+@authenticated_route
+def chatbotApi():
+    if request.method == 'POST':
+        try:
+            # Get the user input from the form
+            user_input = request.json.get('user_input')
+            # Get the user's button selection
+            button_selection = request.json.get('button')
+
+            # Save the user input and button selection to the Excel file
+            log_data = pd.DataFrame(
+                {'User Input': [user_input], 'Button Selection': [button_selection], 'Timestamp': [datetime.now()]})
+            log_file_path = os.path.join(logs_directory, 'questions.xlsx')
+            if not os.path.isfile(log_file_path):
+                log_data.to_excel(log_file_path, index=False)
+            else:
+                existing_data = pd.read_excel(log_file_path)
+                updated_data = pd.concat([existing_data, log_data], ignore_index=True)
+                updated_data.to_excel(log_file_path, index=False)
+
+            # Generate the chatbot response based on the button selection
+            if button_selection == 'RPM':
+                response = generate_response_rpm(user_input)
+            elif button_selection == 'RIDB':
+                response = generate_response_ridb(user_input)
+            elif button_selection == 'POWERBI':
+                response = generate_response_powerbi(user_input)
+            elif button_selection == 'TMO':
+                response = generate_response_tmo(user_input)
+            else:
+                response = "Invalid button selection. Please click on RPM, RIDB, or POWER BI button"
+
+            return jsonify(response=response)
+        except Exception as e:
+            # Return a more informative error message
+            return jsonify(response=f"Error: {str(e)}")
+
+        #     # Return the response as JSON
+        #     return jsonify(response=response)
+        # except:
+        #     return jsonify(response="Not a JSON application passed to the header")
+
+def preprocess_text(text):
+    # Implement your own text preprocessing logic here
+    return text
+
+def generate_response_ridb(prompt):
+    df = pd.read_csv(r"Deploy Tech Community GSD.csv")
+    # Replace NaN values with empty strings
+    df.fillna('', inplace=True)
+
+    df1 = df[['Market Name', 'Sub-Stream', 'SW Release', 'Title', 'Use Case / Problem statement',
+              'Use Case/Issue Description ']].copy()
+    df1['Combined'] = df1.apply(lambda x: ' '.join(x.dropna().astype(str)), axis=1)
+
+    df2 = df[['final_answer']].copy()
+
+    # Reset the indices to match between df1 and df2
+    df1.reset_index(drop=True, inplace=True)
+    df2.reset_index(drop=True, inplace=True)
+
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(df1['Combined'])
+
+    # Preprocess the user prompt
+    preprocessed_prompt = preprocess_text(prompt)
+
+    keyword_matrix = vectorizer.transform([preprocessed_prompt])
+    similarity_scores = cosine_similarity(tfidf_matrix, keyword_matrix)
+
+    match_indices = similarity_scores.argmax(axis=0)  # Find the indices with maximum similarity score
+    for index in match_indices:
+        if similarity_scores[index] > 0:
+            break  # Exit the loop after finding the first match
+
+    if similarity_scores[index] > 0:
+        answer_main = df2.loc[index, 'final_answer']
+        return answer_main
+    elif any(greeting in prompt.lower() for greeting in ['hi', 'hello', 'hey']):
+        greetings = ["Hey, how can I help you?", "Hello, how can I assist you?", "Hi there, how may I help you?"]
+        return random.choice(greetings)
+    elif "who are you" in prompt.lower():
+        return "I am a chatbot built to solve RIDB and RPM queries."
+    elif "who programmed you" in prompt.lower():
+        creators = ["People from RPM team", "The talented minds at RPM", "RPM team members"]
+        return "I was created by " + random.choice(creators) + "."
+    else:
+        alternative_responses = [
+            "Apologies, but I don't have an answer to that question.",
+            "I'm sorry, that's beyond my knowledge base.",
+            "Unfortunately, I don't have the information you're looking for.",
+            "Regrettably, I can't provide an answer to your question.",
+            "Sorry, I'm unable to assist with that particular inquiry.",
+            "I apologize, but I don't have the relevant information."
+        ]
+        return random.choice(alternative_responses)
+
+def generate_response_rpm(prompt):
+    df = pd.read_excel(r"Project Coordinator Q&A for Chatbot.xlsx")
+    # Replace NaN values with empty strings
+    df.fillna('', inplace=True)
+
+    df1 = df[['Market', 'Sub-stream', 'Project', 'Activity or question']].copy()
+    df1['Combined'] = df1.apply(lambda x: ' '.join(x.dropna().astype(str)), axis=1)
+
+    df2 = df[['Solution']].copy()
+
+    # Reset the indices to match between df1 and df2
+    df1.reset_index(drop=True, inplace=True)
+    df2.reset_index(drop=True, inplace=True)
+
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(df1['Combined'])
+
+    # Preprocess the user prompt
+    preprocessed_prompt = preprocess_text(prompt)
+
+    keyword_matrix = vectorizer.transform([preprocessed_prompt])
+    similarity_scores = cosine_similarity(tfidf_matrix, keyword_matrix)
+
+    match_indices = similarity_scores.argmax(axis=0)  # Find the indices with maximum similarity score
+    for index in match_indices:
+        if similarity_scores[index] > 0:
+            break  # Exit the loop after finding the first match
+
+    if similarity_scores[index] > 0:
+        answer_main = df2.loc[index, 'Solution']
+        return answer_main
+    elif any(greeting in prompt.lower() for greeting in ['hi', 'hello', 'hey']):
+        greetings = ["Hey, how can I help you?", "Hello, how can I assist you?", "Hi there, how may I help you?"]
+        return random.choice(greetings)
+    elif "who are you" in prompt.lower():
+        return "I am a chatbot built to solve RIDB and RPM queries."
+    elif "who programmed you" in prompt.lower():
+        creators = ["People from RPM team", "The talented minds at RPM", "RPM team members"]
+        return "I was created by " + random.choice(creators) + "."
+    else:
+        alternative_responses = [
+            "Apologies, but I don't have an answer to that question.",
+            "I'm sorry, that's beyond my knowledge base.",
+            "Unfortunately, I don't have the information you're looking for.",
+            "Regrettably, I can't provide an answer to your question.",
+            "Sorry, I'm unable to assist with that particular inquiry.",
+            "I apologize, but I don't have the relevant information."
+        ]
+        return random.choice(alternative_responses)
+
+def generate_response_powerbi(prompt):
+    df = pd.read_excel(r"C:\inetpub\wwwroot\chatbot_RIDB_contents\Power BI With URL main.xlsx")
+    # Replace NaN values with empty strings
+    df.fillna('', inplace=True)
+
+    df1 = df[['Customer / PowerBi App Name', 'Page Name', 'KPI Name']].copy()
+    df1['Combined'] = df1.apply(lambda x: ' '.join(x.dropna().astype(str)), axis=1)
+    df1['Combined'] = df1['Combined'].str.lower()  # Convert to lowercase for better matching
+
+    df2 = df[['URL']].copy()
+
+    # Reset the indices to match between df1 and df2
+    df1.reset_index(drop=True, inplace=True)
+    df2.reset_index(drop=True, inplace=True)
+
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(df1['Combined'])
+
+    # Preprocess the user prompt
+    preprocessed_prompt = preprocess_text(prompt)
+
+    keyword_matrix = vectorizer.transform([preprocessed_prompt])
+    similarity_scores = cosine_similarity(tfidf_matrix, keyword_matrix)
+
+    match_indices = similarity_scores.argmax(axis=0)  # Find the indices with maximum similarity score
+    index = match_indices[0]  # Get the first index from the match_indices
+
+    if similarity_scores[index] > 0:
+        answer_main = df2.loc[index, 'URL']
+        hyperlink = f'<a href="{answer_main}" target="_blank">{answer_main}</a>'
+        webbrowser.open_new_tab(answer_main)  # Open the link in a new tab
+
+        return "Here is the link you requested: " + hyperlink
+
+    elif any(greeting in prompt.lower() for greeting in ['hi', 'hello', 'hey']):
+        greetings = ["Hey, how can I help you?", "Hello, how can I assist you?", "Hi there, how may I help you?"]
+        return random.choice(greetings)
+    elif "who are you" in prompt.lower():
+        return "I am a chatbot built to solve RIDB and RPM queries."
+    elif "who programmed you" in prompt.lower():
+        creators = ["People from RPM team", "The talented minds at RPM", "RPM team members"]
+        return "I was created by " + random.choice(creators) + "."
+    else:
+        alternative_responses = [
+            "Apologies, but I don't have an answer to that question.",
+            "I'm sorry, that's beyond my knowledge base.",
+            "Unfortunately, I don't have the information you're looking for.",
+            "Regrettably, I can't provide an answer to your question.",
+            "Sorry, I'm unable to assist with that particular inquiry.",
+            "I apologize, but I don't have the relevant information."
+        ]
+        return random.choice(alternative_responses)
+
+
+
+#########################################################################################################
+
+# Load the CSV file
+data = pd.read_csv(r"C:\inetpub\wwwroot\ridbdep\Deploy Tech Community GSD.csv")
+data = data.fillna('')  # Replace NaN values with empty strings
+
+# Load the logincheck.xlsx file
+login_data = pd.read_excel(r"C:\inetpub\wwwroot\ridbdep\logincheck.xlsx")
+email_addresses = login_data["email_address"].tolist()
+
+# Get unique values from columns
+market_names = data['Market Name'].unique()
+sub_streams = data['Sub-Stream'].unique()
+sw_releases = data['SW Release'].unique()
+
+# Function to prompt the user for input with suggestions
+def prompt_user(message, suggestions):
+    while True:
+        user_input = input(f"{message} ({', '.join(suggestions)}): ")
+        if user_input in suggestions:
+            return user_input
+        print("Invalid input. Please try again.")
+
+# Function to save user data in an Excel file
+def save_user_data(email, market_name, sub_stream, sw_release, user_question):
+    import datetime
+    current_date = datetime.date.today().strftime("%Y-%m-%d")
+    file_path = f"C:\\inetpub\\wwwroot\\ridbdep\\user_data_{current_date}.xlsx"
+
+    # Check if the file already exists
+    try:
+        existing_data = pd.read_excel(file_path)
+        new_data = pd.DataFrame([[email, market_name, sub_stream, sw_release, user_question]],
+                                columns=["Email", "Market Name", "Sub Stream", "SW Release", "User Question"])
+        updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        updated_data.to_excel(file_path, index=False)
+    except:
+        data = pd.DataFrame([[email, market_name, sub_stream, sw_release, user_question]],
+                            columns=["Email", "Market Name", "Sub Stream", "SW Release", "User Question"])
+        data.to_excel(file_path, index=False)
+
+# Function to save updated data in an Excel file
+def save_updated_data(market_name, sub_stream, sw_release, title, problem_statement, issue_description, work_around):
+    file_path = r"C:\inetpub\wwwroot\ridbdep\updated_data.xlsx"
+
+    # Check if the file already exists
+    try:
+        existing_data = pd.read_excel(file_path)
+        new_data = pd.DataFrame(
+            [[market_name, sub_stream, sw_release, title, problem_statement, issue_description, work_around]],
+            columns=["Market Name", "Sub Stream", "SW Release", "Title", "Use Case / Problem statement",
+                     "Use Case/Issue Description", "Work Around"])
+        updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        updated_data.to_excel(file_path, index=False)
+    except:
+        data = pd.DataFrame(
+            [[market_name, sub_stream, sw_release, title, problem_statement, issue_description, work_around]],
+            columns=["Market Name", "Sub Stream", "SW Release", "Title", "Use Case / Problem statement",
+                     "Use Case/Issue Description", "Work Around"])
+        data.to_excel(file_path, index=False)
+
+from sklearn.feature_extraction.text import CountVectorizer
+@app.route('/ridb', methods=['GET', 'POST'])
+def ridb_chatbot():
+    if request.method == 'POST':
+        # Get user inputs from the form
+        email = request.form['email']
+        if email not in email_addresses:
+            return render_template('index4.html', market_names=market_names, sub_streams=sub_streams,
+                                   sw_releases=sw_releases, error="Invalid email address.")
+
+        # Get user inputs from the form
+        market_name = request.form['market_name']
+        sub_stream = request.form['sub_stream']
+        sw_release = request.form['sw_release']
+        user_question = request.form['user_question']
+
+        # Save the user data in the Excel file
+        save_user_data(email, market_name, sub_stream, sw_release, user_question)
+
+        # Combine the original data and updated data
+        original_data = data.copy()
+        updated_data = pd.read_excel(r"C:\inetpub\wwwroot\ridbdep\updated_data.xlsx")
+
+        # Rename the column in updated_data to match the column in the original data
+        updated_data = updated_data.rename(columns={"Use Case/Issue Description": "Use Case / Issue Description "})
+
+        combined_data = pd.concat([original_data, updated_data], ignore_index=True)
+
+        # Calculate cosine similarity between user question and relevant columns
+        corpus = [
+            ' '.join([str(title), str(problem_statement), str(issue_description)])
+            for title, problem_statement, issue_description in
+            zip(combined_data['Title'], combined_data['Use Case / Problem statement'],
+                combined_data['Use Case / Issue Description '])
+        ]
+        vectorizer = CountVectorizer().fit_transform(corpus + [user_question])
+        cos_sim = cosine_similarity(vectorizer[:-1], vectorizer[-1])
+
+        # Get the indices of the top 3 matching rows
+        top_indices = cos_sim.argsort(axis=None)[-3:][::-1]
+
+        # Get the matching rows
+        matching_rows = []
+        for index in top_indices:
+            matching_rows.append(index)
+
+        return render_template('rescheck.html', matching_rows=matching_rows, data=combined_data)
+
+    return render_template('index4.html', market_names=market_names, sub_streams=sub_streams, sw_releases=sw_releases)
+
+
+@app.route('/walk_around/<int:index>')
+def walk_around(index):
+    workaround = data.loc[index, 'Work Around']
+    return workaround
+
+
+@app.route('/update', methods=['GET', 'POST'])
+def update():
+    if request.method == 'POST':
+        # Get updated data from the form
+        market_name = request.form['market_name']
+        sub_stream = request.form['sub_stream']
+        sw_release = request.form['sw_release']
+        title = request.form['title']
+        problem_statement = request.form['problem_statement']
+        issue_description = request.form['issue_description']
+        work_around = request.form['work_around']
+
+        # Check if the email is authorized to update
+        email = request.form['email']
+        if email not in login_data['update_auto'].tolist():
+            return render_template('update.html', success=False, error="You are not authorized to update the database.")
+
+        # Save the updated data in the Excel file
+        save_updated_data(market_name, sub_stream, sw_release, title, problem_statement, issue_description, work_around)
+
+        return render_template('update.html', success=True)
+
+    return render_template('update.html', success=False)
+
+########################################################################################
+
+import re
+def generate_response_tmo(prompt):
+    df = pd.read_excel(r'C:\inetpub\wwwroot\chatbot_RIDB_contents\chattestbook.xlsx')
+
+    def find_matching_column(user_question, possible_columns):
+        vectorizer = TfidfVectorizer()
+        vectors = vectorizer.fit_transform([user_question] + possible_columns)
+        cosine_similarities = cosine_similarity(vectors[0:1], vectors).flatten()
+        best_match_idx = cosine_similarities[1:].argmax()
+        return possible_columns[best_match_idx]
+
+    def total_value_updated(column_name):
+        non_aggregate_df = df[df['Market'] != 'Total']
+        return non_aggregate_df[column_name].sum()
+
+    def specific_value(region, market, column_name):
+        return df[(df['Region'] == region) & (df['Market'] == market)][column_name].values[0]
+
+    def sum_values(region_or_market, column_name):
+        if region_or_market.upper() in df['Region'].unique():
+            return df[df['Region'] == region_or_market][column_name].sum()
+        elif region_or_market.upper() in df['Market'].unique():
+            return df[df['Market'] == region_or_market][column_name].sum()
+        else:
+            return None
+
+    def combine_values(regions_or_markets, column_name):
+        total = 0
+        for region_or_market in regions_or_markets:
+            total += sum_values(region_or_market, column_name)
+        return total
+
+    def market_with_extreme_value(column_name, operation):
+        non_aggregate_df = df[df['Market'] != 'Total']
+        if operation == "max":
+            max_value = non_aggregate_df[column_name].max()
+            market = non_aggregate_df[non_aggregate_df[column_name] == max_value]["Market"].values[0]
+            return market, max_value
+        elif operation == "min":
+            min_value = non_aggregate_df[column_name].min()
+            market = non_aggregate_df[non_aggregate_df[column_name] == min_value]["Market"].values[0]
+            return market, min_value
+        else:
+            return None
+
+    def process_user_question(user_question):
+        matching_column = find_matching_column(user_question, df.columns[2:].tolist())
+        regions_markets_mentioned = [rm for rm in df['Region'].unique().tolist() + df['Market'].unique().tolist() if
+                                     rm in user_question.upper()]
+
+        if re.search(r'\b(total|overall|all)\b', user_question, re.IGNORECASE):
+            return total_value_updated(matching_column)
+        elif re.search(r'\bspecific\b', user_question, re.IGNORECASE) and len(regions_markets_mentioned) == 2:
+            return specific_value(regions_markets_mentioned[0], regions_markets_mentioned[1], matching_column)
+        elif re.search(r'\b(sum|aggregate)\b', user_question, re.IGNORECASE) or (
+                len(regions_markets_mentioned) == 1 and "least" not in user_question.lower() and "most" not in user_question.lower()):
+            return sum_values(regions_markets_mentioned[0], matching_column)
+        elif re.search(r'\b(minimum|least)\b', user_question, re.IGNORECASE) and not regions_markets_mentioned:
+            market, value = market_with_extreme_value(matching_column, 'min')
+            return f"{market} with {value}%"
+        elif re.search(r'\b(maximum|most|highest)\b', user_question, re.IGNORECASE) and not regions_markets_mentioned:
+            market, value = market_with_extreme_value(matching_column, 'max')
+            return f"{market} with {value}%"
+        elif len(regions_markets_mentioned) > 1:
+            return combine_values(regions_markets_mentioned, matching_column)
+        else:
+            alternative_responses = [
+                "Apologies, but I don't have an answer to that question.",
+                "I'm sorry, that's beyond my knowledge base.",
+                "Unfortunately, I don't have the information you're looking for.",
+                "Regrettably, I can't provide an answer to your question.",
+                "Sorry, I'm unable to assist with that particular inquiry.",
+                "I apologize, but I don't have the relevant information."
+            ]
+            return random.choice(alternative_responses)
+    print(str(process_user_question(prompt)))
+    # Convert the result to a string before returning
+    return str(process_user_question(prompt))
+
+
+
+
+
+
+
+##############################################################################
+#### crew sim code ###
+
+
+# Load the modified l data
+# NOTE: Update the path accordingly
+df_crewsim = pd.read_excel(r"C:\inetpub\wwwroot\chatbot_RIDB_contents\updated_data (5).xlsx")
+# df_crewsim = df_crewsim.sort_values(by='Market')
+
+regions = df_crewsim['Region'].unique().tolist()
+markets = df_crewsim['Market'].unique().tolist()
+smps = df_crewsim['SMP Name'].unique().tolist()
+sdrms = df_crewsim['Site Deployment Reference Model'].unique().tolist()
+sdrm_project_types = df_crewsim['SDRM-Project Type'].unique().tolist()
+months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+          "December"]
+
+
+@app.route('/get_sdrms', methods=['GET'])
+def get_sdrms():
+    selected_smp = request.args.get('smp')
+    available_sdrms = df_crewsim[df_crewsim['SMP Name'] == selected_smp][
+        'Site Deployment Reference Model'].unique().tolist()
+    return jsonify(available_sdrms)
+
+
+@app.route('/get_sdrm_project_types', methods=['GET'])
+def get_sdrm_project_types():
+    selected_sdrm = request.args.get('sdrm')
+    available_sdrm_project_types = df_crewsim[df_crewsim['Site Deployment Reference Model'] == selected_sdrm][
+        'SDRM-Project Type'].unique().tolist()
+    return jsonify(available_sdrm_project_types)
+
+
+@app.route('/get_markets', methods=['GET'])
+def get_markets():
+    region = request.args.get('region')
+    available_markets = df_crewsim[df_crewsim['Region'] == region]['Market'].unique().tolist()
+    return jsonify(available_markets)
+
+
+@app.route('/get_cycle_time', methods=['GET'])
+def get_cycle_time():
+    smp = request.args.get('smp')
+    sdrm = request.args.get('sdrm')
+    sdrm_project_type = request.args.get('sdrm_project_type')
+    selected_markets = request.args.getlist('markets')  # Get all selected markets
+
+    # Filter rows based on the selected configuration and markets
+    cycle_time_rows = df_crewsim[
+        (df_crewsim['SMP Name'] == smp) &
+        (df_crewsim['Site Deployment Reference Model'] == sdrm) &
+        (df_crewsim['SDRM-Project Type'] == sdrm_project_type) &
+        (df_crewsim['Market'].isin(selected_markets))  # Filter by selected markets
+        ]['Cycle time']
+    # print(cycle_time_rows)
+    if not cycle_time_rows.empty:
+        average_cycle_time = cycle_time_rows.mean()
+        return jsonify({'cycle_time': average_cycle_time})
+    else:
+        return jsonify({'error': 'Cycle time not available'})
+
+
+def count_days(year, month):
+    import datetime
+    weekdays_count = sum(1 for week in calendar.monthcalendar(year, month) for day in week if
+                         day != 0 and datetime.date(year, month, day).weekday() < 5)
+    weekends_count = sum(1 for week in calendar.monthcalendar(year, month) for day in week if
+                         day != 0 and datetime.date(year, month, day).weekday() >= 5)
+    return weekdays_count, weekends_count
+
+
+@app.route('/crewsim', methods=['GET', 'POST'])
+def index():
+    total_volume_divided = 0
+    cycle_times = {}
+    actual_crew_required = None
+    total_days = 0
+    total_weekends = 0
+    crew_capabilities = {}
+    crews_needed_actual = {}
+    crew_capabilities_ideal = {}  # Added to store the ideal crew capabilities
+    crews_needed_ideal = {}
+    average_slas = {}
+    entered_sites_values = []
+    sum_crews_needed_ideal = 0
+    sum_crews_needed_actual = 0
+    overall_average_sla_time = 0
+    overall_average_cycle_time = 0
+    markets = []
+    form_region = []
+    predicted_cycle_times = {}  # Storing the predicted cycle times for each configuration
+    crew_capabilities_predicted = {}  # Storing the crew capabilities based on predicted cycle times
+    crews_needed_predicted = {}  # Storing the crews needed based on predicted cycle times
+
+    if request.method == 'POST':
+        selected_option2 = request.form.getlist('selectedOption2[]')
+        volume = float(request.form['volume'])
+        smps_selected = request.form.getlist('smp')
+        sdrms_selected = request.form.getlist('sdrm')
+        sdrm_project_types_selected = request.form.getlist('sdrm_project_type')
+        percentages = request.form.getlist('percentage')
+        selected_months = request.form.getlist('months')
+        markets = request.form.getlist('market[]')
+        form_region = request.form.getlist('region[]')
+
+        selected_months = request.form.getlist('months')
+        import datetime
+        current_year = datetime.datetime.now().year
+        for month_name in selected_months:
+            month_num = months.index(month_name) + 1
+            weekdays, weekends = count_days(current_year, month_num)
+            total_days += weekdays
+            total_weekends += weekends
+
+        # for i in range(len(smps_selected)):
+        #     # for market in markets:
+        #     key = f"{smps_selected[i]}, {sdrms_selected[i]}, {sdrm_project_types_selected[i]}"
+        #     total_volume_divided += volume * (float(percentages[i]) / 100)
+        #
+        #     filtered_rows = df_crewsim[
+        #         (df_crewsim['Region'].isin(form_region)) &
+        #         (df_crewsim['Market'].isin(markets)) &
+        #         (df_crewsim['SMP Name'].isin(smps_selected)) &
+        #         (df_crewsim['Site Deployment Reference Model'].isin(sdrms_selected)) &
+        #         (df_crewsim['SDRM-Project Type'].isin(sdrm_project_types_selected))
+        #         ]
+        #
+        #     average_cycle_time = filtered_rows['Cycle time'].mean()
+        #     average_sla_time = filtered_rows['Installation SLA'].mean()
+        #     average_predicted_cycle_time = filtered_rows['Predicted Cycle time'].mean()
+        #
+        #     cycle_times[key] = round(average_cycle_time) if not pd.isna(average_cycle_time) else "Not available"
+        #     average_slas[key] = round(average_sla_time) if not pd.isna(average_sla_time) else "Not available"
+
+        for i in range(len(smps_selected)):
+            key = f"{smps_selected[i]}, {sdrms_selected[i]}, {sdrm_project_types_selected[i]}"
+            total_volume_divided += volume * (float(percentages[i]) / 100)
+
+            filtered_rows = df_crewsim[
+                (df_crewsim['Region'].isin(form_region)) &
+                (df_crewsim['Market'].isin(markets)) &
+                (df_crewsim['SMP Name'] == smps_selected[i]) &  # Filter by the individual SMP
+                (df_crewsim['Site Deployment Reference Model'] == sdrms_selected[
+                    i]) &  # Filter by the individual SDRM
+                (df_crewsim['SDRM-Project Type'] == sdrm_project_types_selected[i])
+                # Filter by the individual SDRM project type
+                ]
+            filtered_rows = df_crewsim[
+                (df_crewsim['Region'].isin(form_region)) &
+                (df_crewsim['Market'].isin(markets)) &
+                (df_crewsim['SMP Name'] == smps_selected[i]) &  # Filter by the individual SMP
+                (df_crewsim['Site Deployment Reference Model'] == sdrms_selected[i]) &  # Filter by the individual SDRM
+                (df_crewsim['SDRM-Project Type'] == sdrm_project_types_selected[i])
+                # Filter by the individual SDRM project type
+                ]
+
+            average_cycle_time = filtered_rows['Cycle time'].mean()
+            average_sla_time = filtered_rows['Installation SLA'].mean()
+            average_predicted_cycle_time = filtered_rows['Predicted Cycle time'].mean()
+
+            # If NaN, compute mean values based on the selected configuration
+            if pd.isna(average_cycle_time):
+                average_cycle_time = df_crewsim[
+                    (df_crewsim['SMP Name'] == smps_selected[i]) &
+                    (df_crewsim['Site Deployment Reference Model'] == sdrms_selected[i]) &
+                    (df_crewsim['SDRM-Project Type'] == sdrm_project_types_selected[i])
+                    ]['Cycle time'].mean()
+            if pd.isna(average_sla_time):
+                average_sla_time = df_crewsim[
+                    (df_crewsim['SMP Name'] == smps_selected[i]) &
+                    (df_crewsim['Site Deployment Reference Model'] == sdrms_selected[i]) &
+                    (df_crewsim['SDRM-Project Type'] == sdrm_project_types_selected[i])
+                    ]['Installation SLA'].mean()
+            if pd.isna(average_predicted_cycle_time):
+                average_predicted_cycle_time = df_crewsim[
+                    (df_crewsim['SMP Name'] == smps_selected[i]) &
+                    (df_crewsim['Site Deployment Reference Model'] == sdrms_selected[i]) &
+                    (df_crewsim['SDRM-Project Type'] == sdrm_project_types_selected[i])
+                    ]['Predicted Cycle time'].mean()
+
+            cycle_times[key] = round(average_cycle_time)
+            average_slas[key] = round(average_sla_time)
+            predicted_cycle_times[key] = round(average_predicted_cycle_time)
+            print(filtered_rows[['Cycle time', 'Installation SLA', 'Predicted Cycle time']])
+            print(average_cycle_time, average_sla_time, average_predicted_cycle_time)
+
+            # Calculate crew capabilities and crew needs based on the predicted cycle time
+            config_specific_volume = volume * (float(percentages[i]) / 100)
+
+            # Calculate crew capabilities and crew needs based on the predicted cycle time
+            if not pd.isna(average_predicted_cycle_time):
+                crew_capabilities_predicted[key] = total_days / average_predicted_cycle_time
+                crews_needed_predicted[key] = round(config_specific_volume / crew_capabilities_predicted[key]) if \
+                    crew_capabilities_predicted[key] != 0 else float('inf')
+            else:
+                crew_capabilities_predicted[key] = "Not available"
+                crews_needed_predicted[key] = "Not available"
+
+            if not pd.isna(average_cycle_time):
+                crew_capabilities[key] = total_days / average_cycle_time
+                crews_needed_actual[key] = round(config_specific_volume / crew_capabilities[key]) if \
+                    crew_capabilities[key] != 0 else float('inf')
+            else:
+                crew_capabilities[key] = "Not available"
+                crews_needed_actual[key] = "Not available"
+
+            # Calculate crew capabilities and crew needs based on the SLA
+            if not pd.isna(average_sla_time):
+                crew_capabilities_ideal[key] = total_days / average_sla_time
+                crews_needed_ideal[key] = round(config_specific_volume / crew_capabilities_ideal[key]) if \
+                    crew_capabilities_ideal[key] != 0 else float('inf')
+            else:
+                crew_capabilities_ideal[key] = "Not available"
+                crews_needed_ideal[key] = "Not available"
+            entered_sites_values.append(float(percentages[i]))
+
+        actual_crew_required = total_volume_divided / len(smps_selected)
+
+        sum_crews_needed_ideal = sum([value for key, value in crews_needed_ideal.items() if value != "Not available"])
+        sum_crews_needed_actual = sum([value for key, value in crews_needed_actual.items() if value != "Not available"])
+        sum_crews_needed_predicted = sum(
+            [value for key, value in crews_needed_predicted.items() if value != "Not available"])
+
+        return render_template('result4-crewsim.html', regions=form_region, markets=markets, months=selected_months,
+                               smps=smps,
+                               sdrms=sdrms,
+                               sdrm_project_types=sdrm_project_types, actual_crew_required=actual_crew_required,
+                               cycle_times=cycle_times, total_days=total_days, total_weekends=total_weekends,
+                               crew_capabilities=crew_capabilities, crews_needed_actual=crews_needed_actual,
+                               crew_capabilities_ideal=crew_capabilities_ideal, crews_needed_ideal=crews_needed_ideal,
+                               average_slas=average_slas, entered_sites_values=entered_sites_values,
+                               sum_crews_needed_ideal=sum_crews_needed_ideal,
+                               sum_crews_needed_actual=sum_crews_needed_actual, cycle=overall_average_cycle_time,
+                               sla=overall_average_sla_time, predicted_cycle_times=predicted_cycle_times,
+                               crew_capabilities_predicted=crew_capabilities_predicted,
+                               crews_needed_predicted=crews_needed_predicted,
+                               sum_crews_needed_predicted=sum_crews_needed_predicted)
+
+    return render_template('main52-crewsim.html', regions=regions, markets=markets, months=months, smps=smps,
+                           sdrms=sdrms,
+                           sdrm_project_types=sdrm_project_types, actual_crew_required=actual_crew_required,
+                           cycle_times=cycle_times, total_days=total_days, total_weekends=total_weekends,
+                           crew_capabilities=crew_capabilities, crews_needed_actual=crews_needed_actual,
+                           crew_capabilities_ideal=crew_capabilities_ideal, crews_needed_ideal=crews_needed_ideal,
+                           average_slas=average_slas, entered_sites_values=entered_sites_values,
+                           sum_crews_needed_ideal=sum_crews_needed_ideal,
+                           sum_crews_needed_actual=sum_crews_needed_actual, cycle=overall_average_cycle_time,
+                           sla=overall_average_sla_time)
+
+
+# """ ============NEw code i added =============="""
+
+@app.route('/get_second_dropdown_data', methods=['POST'])
+def get_options():
+    # Filter rows
+    selected_regions = request.json.get('selectedOptions')
+    second_dropdown_data = []
+
+    for selected_region in selected_regions:
+        if selected_region in regions:
+            north_rows = df_crewsim[df_crewsim['Region'] == selected_region]
+            # Get unique values
+            second_dropdown_data += north_rows['Market'].unique().tolist()
+    return jsonify(second_dropdown_data)
+
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5016)
